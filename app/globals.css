@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f1fff7;
+  --foreground: #1c2b22;
+
+  --ppm-green: #0e9d54;
+  --ppm-green-dark: #0a7a41;
+  --ppm-green-darker: #075c31;
+  --ppm-gold: #c99a2e;
+  --ppm-gold-dark: #a87c1f;
+  --ppm-cream: #fff9e6;
+  --ppm-border: #e3c988;
+
+  --status-hadir: #16a34a;
+  --status-terlambat: #a1662f;
+  --status-izin: #d4a017;
+  --status-sakit: #2094c9;
+  --status-alpa: #dc2626;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-ppm-green: var(--ppm-green);
+  --color-ppm-green-dark: var(--ppm-green-dark);
+  --color-ppm-green-darker: var(--ppm-green-darker);
+  --color-ppm-gold: var(--ppm-gold);
+  --color-ppm-gold-dark: var(--ppm-gold-dark);
+  --color-ppm-cream: var(--ppm-cream);
+  --color-ppm-border: var(--ppm-border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+.font-display {
+  font-family: Georgia, "Times New Roman", "Noto Serif", serif;
+  letter-spacing: 0.01em;
+}
+
+/* Scrollbar tipis untuk tabel matrix yang lebar */
+.scroll-thin::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background-color: var(--ppm-border);
+  border-radius: 9999px;
+}
