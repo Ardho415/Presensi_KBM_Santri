@@ -46,19 +46,16 @@ export function OperatorsContent() {
     }
   }
 
-  async function handleToggle(id: string, active: boolean) {
+  async function handleDelete(id: string, name: string) {
+    if (!window.confirm(`Hapus ${name} dari daftar petugas?`)) return;
     try {
-      const res = await fetch(`/api/operators/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active: !active }),
-      });
+      const res = await fetch(`/api/operators/${id}`, { method: "DELETE" });
       const result = await res.json();
       if (!result.ok) {
-        showToast(result.message ?? "Gagal memperbarui petugas.", "error");
+        showToast(result.message ?? "Gagal menghapus petugas.", "error");
         return;
       }
-      showToast(active ? "Petugas dinonaktifkan." : "Petugas diaktifkan kembali.");
+      showToast("Petugas berhasil dihapus.");
       mutate();
     } catch {
       showToast("Gagal terhubung ke server.", "error");
@@ -141,10 +138,10 @@ export function OperatorsContent() {
                   </td>
                   <td className="px-4 py-2 text-right">
                     <button
-                      onClick={() => handleToggle(o.id, o.active)}
-                      className="text-sm font-semibold text-ppm-green-dark"
+                      onClick={() => handleDelete(o.id, o.student_name)}
+                      className="text-sm font-semibold text-red-600 hover:text-red-700"
                     >
-                      {o.active ? "Nonaktifkan" : "Aktifkan"}
+                      Hapus
                     </button>
                   </td>
                 </tr>

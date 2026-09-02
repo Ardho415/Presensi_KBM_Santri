@@ -99,7 +99,7 @@ create index if not exists idx_operators_active on attendance_operators(active);
 -- ---------------------------------------------------------------------
 create table if not exists session_settings (
   id uuid primary key default gen_random_uuid(),
-  session_type text not null unique check (session_type in ('subuh', 'malam')),
+  session_type text not null unique check (session_type in ('subuh', 'pagi', 'siang', 'malam')),
   label text not null,
   scan_start_time time not null,
   on_time_until time not null,
@@ -117,7 +117,7 @@ create table if not exists session_settings (
 create table if not exists attendance_sessions (
   id uuid primary key default gen_random_uuid(),
   session_date date not null,
-  session_type text not null check (session_type in ('subuh', 'malam')),
+  session_type text not null check (session_type in ('subuh', 'pagi', 'siang', 'malam')),
   scan_start_time time not null,
   on_time_until time not null,
   end_time time not null,

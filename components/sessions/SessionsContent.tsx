@@ -24,7 +24,7 @@ export function SessionsContent() {
   );
 
   const [date, setDate] = useState(todayWIBString());
-  const [sessionType, setSessionType] = useState<"subuh" | "malam">("subuh");
+  const [sessionType, setSessionType] = useState<"subuh" | "pagi" | "siang" | "malam">("subuh");
   const [scanStart, setScanStart] = useState("");
   const [onTimeUntil, setOnTimeUntil] = useState("");
   const [endTime, setEndTime] = useState("");
@@ -156,6 +156,8 @@ export function SessionsContent() {
               <Field label="Jenis Sesi">
                 <Select value={sessionType} onChange={(e) => setSessionType(e.target.value as any)}>
                   <option value="subuh">Subuh</option>
+                  <option value="pagi">Pagi</option>
+                  <option value="siang">Siang</option>
                   <option value="malam">Malam</option>
                 </Select>
               </Field>
@@ -226,65 +228,161 @@ export function SessionsContent() {
         )}
         <div className="flex flex-col gap-3">
           {(sessionsData?.sessions ?? []).map((s: any) => (
-            <Card key={s.id} className="p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="font-semibold text-gray-800">
-                    {formatDateIndonesian(s.session_date)} &middot;{" "}
-                    {s.session_type === "subuh" ? "Subuh" : "Malam"}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    Scan {s.scan_start_time?.slice(0, 5)} &bull; Tepat waktu s/d{" "}
-                    {s.on_time_until?.slice(0, 5)} &bull; Selesai {s.end_time?.slice(0, 5)}
-                  </p>
-                </div>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap gap-2">
-                  {(s.session_groups ?? []).map((sg: any) => (
-                    <div
-                      key={sg.id}
-                      className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold ${
-                        sg.closed_manually
-                          ? "border-red-200 bg-red-50 text-red-600"
-                          : "border-ppm-border bg-ppm-cream text-gray-600"
-                      }`}
-                    >
-                      {sg.groups?.name}
-                      {sg.finalized && (
-                        <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600">
-                          selesai
-                        </span>
-                      )}
-                      {!sg.finalized && (
-                        <button
-                          onClick={() =>
-                            handleToggleGroup(
-                              s.id,
-                              sg.groups?.id,
-                              sg.closed_manually ? "reopen" : "close"
-                            )
-                          }
-                          className="ml-1 underline decoration-dotted"
-                        >
-                          {sg.closed_manually ? "Buka lagi" : "Tutup"}
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                <button
-                  onClick={() => handleDeleteSession(s.id)}
-                  className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-100"
-                >
-                  Hapus
-                </button>
-              </div>
-            </Card>
+            <SessionItem 
+              key={s.id} 
+              s={s} 
+              onToggleGroup={handleToggleGroup} 
+              onDeleteSession={handleDeleteSession} 
+              onMutate={mutate} 
+            />
           ))}
         </div>
       </div>
     </div>
+  );
+}
+
+function SessionItem({ 
+  s, 
+  onToggleGroup, 
+  onDeleteSession, 
+  onMutate 
+}: { 
+  s: any, 
+  onToggleGroup: (sId: string, gId: string, action: "close" | "reopen") => void, 
+  onDeleteSession: (id: string) => void,
+  onMutate: () => void 
+}) {
+  const { showToast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [date, setDate] = useState(s.session_date?.slice(0, 10));
+  const [sessionType, setSessionType] = useState(s.session_type);
+  const [scanStart, setScanStart] = useState(s.scan_start_time?.slice(0, 5));
+  const [onTimeUntil, setOnTimeUntil] = useState(s.on_time_until?.slice(0, 5));
+  const [endTime, setEndTime] = useState(s.end_time?.slice(0, 5));
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/sessions/${s.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionDate: date,
+          sessionType,
+          scanStartTime: scanStart,
+          onTimeUntil,
+          endTime
+        }),
+      });
+      const result = await res.json();
+      if (!result.ok) {
+        showToast(result.message ?? "Gagal menyimpan perubahan.", "error");
+        return;
+      }
+      showToast("Sesi berhasil diperbarui.");
+      setEditing(false);
+      onMutate();
+    } catch {
+      showToast("Gagal terhubung ke server.", "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <Card className="p-4 border-ppm-green">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5 mb-4">
+          <Field label="Tanggal">
+            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </Field>
+          <Field label="Jenis Sesi">
+            <Select value={sessionType} onChange={(e) => setSessionType(e.target.value as any)}>
+              <option value="subuh">Subuh</option>
+              <option value="pagi">Pagi</option>
+              <option value="siang">Siang</option>
+              <option value="malam">Malam</option>
+            </Select>
+          </Field>
+          <Field label="Mulai Scan">
+            <Input type="time" value={scanStart} onChange={(e) => setScanStart(e.target.value)} />
+          </Field>
+          <Field label="Batas Tepat Waktu">
+            <Input type="time" value={onTimeUntil} onChange={(e) => setOnTimeUntil(e.target.value)} />
+          </Field>
+          <Field label="Selesai">
+            <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+          </Field>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setEditing(false)}>Batal</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? "Menyimpan..." : "Simpan Sesi"}</Button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-semibold text-gray-800">
+            {formatDateIndonesian(s.session_date)} &middot;{" "}
+            {s.session_type.charAt(0).toUpperCase() + s.session_type.slice(1)}
+          </p>
+          <p className="text-xs text-gray-500">
+            Scan {s.scan_start_time?.slice(0, 5)} &bull; Tepat waktu s/d{" "}
+            {s.on_time_until?.slice(0, 5)} &bull; Selesai {s.end_time?.slice(0, 5)}
+          </p>
+        </div>
+        <button onClick={() => setEditing(true)} className="text-sm font-semibold text-ppm-green-dark underline">
+          Edit
+        </button>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          {(s.session_groups ?? []).map((sg: any) => (
+            <div
+              key={sg.id}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                sg.closed_manually
+                  ? "border-red-200 bg-red-50 text-red-600"
+                  : "border-ppm-border bg-ppm-cream text-gray-600"
+              }`}
+            >
+              {sg.groups?.name}
+              {sg.finalized && (
+                <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] text-gray-600">
+                  selesai
+                </span>
+              )}
+              {!sg.finalized && (
+                <button
+                  onClick={() =>
+                    onToggleGroup(
+                      s.id,
+                      sg.groups?.id,
+                      sg.closed_manually ? "reopen" : "close"
+                    )
+                  }
+                  className="ml-1 underline decoration-dotted"
+                >
+                  {sg.closed_manually ? "Buka lagi" : "Tutup"}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={() => onDeleteSession(s.id)}
+          className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-100"
+        >
+          Hapus Sesi
+        </button>
+      </div>
+    </Card>
   );
 }

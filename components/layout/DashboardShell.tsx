@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/sessions", label: "Buka Sesi" },
   { href: "/students", label: "Data Santri" },
+  { href: "/classes", label: "Master Kelas" },
   { href: "/attendance", label: "Detail Presensi" },
   { href: "/recap", label: "Rekap Presensi" },
   { href: "/operators", label: "Petugas Presensi" },

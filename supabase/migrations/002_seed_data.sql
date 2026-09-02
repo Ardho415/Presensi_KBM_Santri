@@ -24,8 +24,10 @@ on conflict (name) do nothing;
 
 -- 3. Default session settings (Subuh & Malam)
 insert into session_settings (session_type, label, scan_start_time, on_time_until, end_time) values
-  ('subuh', 'Subuh', '04:30', '04:45', '05:45'),
-  ('malam', 'Malam', '19:00', '19:30', '21:00')
+  ('subuh', 'Subuh', '04:30', '04:45', '06:00'),
+  ('pagi', 'Pagi', '08:00', '08:15', '10:00'),
+  ('siang', 'Siang', '13:00', '13:30', '15:00'),
+  ('malam', 'Malam', '19:00', '19:30', '22:00')
 on conflict (session_type) do nothing;
 
 -- 4. Beberapa santri dummy (secukupnya untuk testing)

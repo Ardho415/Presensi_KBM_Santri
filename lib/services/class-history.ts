@@ -1,5 +1,7 @@
 import "server-only";
-import { SupabaseClient } from "@supabase/supabase-js";
+import pool from "@/lib/db";
+import type { RowDataPacket, ResultSetHeader } from "mysql2";
+import { v4 as uuidv4 } from "uuid";
 
 /**
  * Menentukan kelompok (group_id) seorang santri pada tanggal tertentu,
@@ -7,99 +9,96 @@ import { SupabaseClient } from "@supabase/supabase-js";
  * lama TIDAK berubah ketika santri pindah kelas (requirement #7 & #41).
  */
 export async function getStudentGroupOnDate(
-  supabase: SupabaseClient,
   studentId: string,
   dateStr: string
 ): Promise<{ groupId: string; classId: string; gender: "L" | "P"; groupName: string } | null> {
-  const { data: history, error } = await supabase
-    .from("student_class_history")
-    .select("class_id, gender, effective_from, effective_to")
-    .eq("student_id", studentId)
-    .lte("effective_from", dateStr)
-    .or(`effective_to.is.null,effective_to.gte.${dateStr}`)
-    .order("effective_from", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
+  const [historyRows] = await pool.query<RowDataPacket[]>(
+    `SELECT class_id, gender, effective_from, effective_to 
+     FROM student_class_history 
+     WHERE student_id = ? 
+       AND effective_from <= ? 
+       AND (effective_to IS NULL OR effective_to >= ?)
+     ORDER BY effective_from DESC 
+     LIMIT 1`,
+    [studentId, dateStr, dateStr]
+  );
 
   let classId: string;
   let gender: "L" | "P";
 
-  if (history) {
-    classId = history.class_id;
-    gender = history.gender;
+  if (historyRows.length > 0) {
+    classId = historyRows[0].class_id;
+    gender = historyRows[0].gender;
   } else {
-    // Fallback: tidak ada baris histori yang cocok (seharusnya jarang
-    // terjadi). Gunakan data kelas santri saat ini sebagai pengaman.
-    const { data: student, error: studentError } = await supabase
-      .from("students")
-      .select("class_id, gender")
-      .eq("id", studentId)
-      .single();
-    if (studentError || !student) return null;
-    classId = student.class_id;
-    gender = student.gender;
+    // Fallback
+    const [studentRows] = await pool.query<RowDataPacket[]>(
+      `SELECT class_id, gender FROM students WHERE id = ? LIMIT 1`,
+      [studentId]
+    );
+    if (studentRows.length === 0) return null;
+    classId = studentRows[0].class_id;
+    gender = studentRows[0].gender;
   }
 
-  const { data: group, error: groupError } = await supabase
-    .from("groups")
-    .select("id, name")
-    .eq("class_id", classId)
-    .eq("gender", gender)
-    .maybeSingle();
+  const [groupRows] = await pool.query<RowDataPacket[]>(
+    `SELECT id, name FROM groups WHERE class_id = ? AND gender = ? LIMIT 1`,
+    [classId, gender]
+  );
 
-  if (groupError || !group) return null;
+  if (groupRows.length === 0) return null;
 
-  return { groupId: group.id, classId, gender, groupName: group.name };
+  return { groupId: groupRows[0].id, classId, gender, groupName: groupRows[0].name };
 }
 
 /**
  * Dipanggil ketika admin mengubah kelas seorang santri. Menutup baris
  * histori aktif (effective_to = sehari sebelum tanggal efektif baru)
- * lalu membuat baris baru. Perubahan berlaku mulai hari perubahan;
- * data historis attendance tidak diubah sama sekali.
+ * lalu membuat baris baru. Perubahan berlaku mulai hari perubahan.
  */
 export async function changeStudentClass(
-  supabase: SupabaseClient,
   studentId: string,
   newClassId: string,
   newGender: "L" | "P",
   effectiveFrom: string // yyyy-MM-dd (WIB)
 ): Promise<void> {
   const dayBefore = shiftDate(effectiveFrom, -1);
+  const connection = await pool.getConnection();
 
-  // Tutup histori yang masih terbuka (effective_to null) dan yang mulai
-  // sebelum tanggal efektif baru.
-  const { data: openRows, error: openErr } = await supabase
-    .from("student_class_history")
-    .select("id, effective_from")
-    .eq("student_id", studentId)
-    .is("effective_to", null);
+  try {
+    await connection.beginTransaction();
 
-  if (openErr) throw openErr;
+    const [openRows] = await connection.query<RowDataPacket[]>(
+      `SELECT id, effective_from FROM student_class_history WHERE student_id = ? AND effective_to IS NULL`,
+      [studentId]
+    );
 
-  for (const row of openRows ?? []) {
-    if (row.effective_from <= dayBefore) {
-      await supabase
-        .from("student_class_history")
-        .update({ effective_to: dayBefore })
-        .eq("id", row.id);
+    for (const row of openRows) {
+      if (row.effective_from <= dayBefore) {
+        await connection.query(
+          `UPDATE student_class_history SET effective_to = ? WHERE id = ?`,
+          [dayBefore, row.id]
+        );
+      }
     }
+
+    await connection.query(
+      `INSERT INTO student_class_history (id, student_id, class_id, gender, effective_from, effective_to)
+       VALUES (?, ?, ?, ?, ?, NULL)`,
+      [uuidv4(), studentId, newClassId, newGender, effectiveFrom]
+    );
+
+    await connection.query(
+      `UPDATE students SET class_id = ?, gender = ? WHERE id = ?`,
+      [newClassId, newGender, studentId]
+    );
+
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
   }
-
-  await supabase.from("student_class_history").insert({
-    student_id: studentId,
-    class_id: newClassId,
-    gender: newGender,
-    effective_from: effectiveFrom,
-    effective_to: null,
-  });
-
-  await supabase
-    .from("students")
-    .update({ class_id: newClassId, gender: newGender })
-    .eq("id", studentId);
 }
 
 function shiftDate(dateStr: string, days: number): string {

@@ -141,7 +141,7 @@ export function AttendanceContent() {
                   <th className="sticky left-0 z-10 bg-ppm-green-dark px-4 py-1 text-left"></th>
                   {data.sessions.map((s: any) => (
                     <th key={s.sessionId} className="border-l border-ppm-green px-2 py-1 font-semibold">
-                      {s.type === "subuh" ? "S" : "M"}
+                      {s.type.charAt(0).toUpperCase()}
                     </th>
                   ))}
                 </tr>
