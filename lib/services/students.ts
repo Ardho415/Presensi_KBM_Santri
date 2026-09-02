@@ -1,8 +1,10 @@
 import "server-only";
-import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import pool from "@/lib/db";
 import { changeStudentClass } from "@/lib/services/class-history";
 import { toWIBDateString } from "@/lib/timezone";
 import type { Gender } from "@/types/domain";
+import type { RowDataPacket } from "mysql2";
+import { v4 as uuidv4 } from "uuid";
 
 export interface StudentListItem {
   id: string;
@@ -20,30 +22,40 @@ export async function listStudents(params: {
   classId?: string;
   active?: boolean;
 }): Promise<StudentListItem[]> {
-  const supabase = getSupabaseAdmin();
-  let query = supabase
-    .from("students")
-    .select("id, nis, name, class_id, gender, generation, active, classes(name)")
-    .order("name", { ascending: true });
+  let query = `
+    SELECT s.id, s.nis, s.name, s.class_id, s.gender, s.generation, s.active, c.name as class_name
+    FROM students s
+    LEFT JOIN classes c ON s.class_id = c.id
+    WHERE 1=1
+  `;
+  const values: any[] = [];
 
-  if (params.classId) query = query.eq("class_id", params.classId);
-  if (params.active !== undefined) query = query.eq("active", params.active);
+  if (params.classId) {
+    query += ` AND s.class_id = ?`;
+    values.push(params.classId);
+  }
+  if (params.active !== undefined) {
+    query += ` AND s.active = ?`;
+    values.push(params.active ? 1 : 0);
+  }
   if (params.search) {
-    query = query.or(`name.ilike.%${params.search}%,nis.ilike.%${params.search}%`);
+    query += ` AND (s.name LIKE ? OR s.nis LIKE ?)`;
+    values.push(`%${params.search}%`, `%${params.search}%`);
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
+  query += ` ORDER BY s.name ASC`;
 
-  return (data ?? []).map((s: any) => ({
+  const [rows] = await pool.query<RowDataPacket[]>(query, values);
+
+  return rows.map(s => ({
     id: s.id,
     nis: s.nis,
     name: s.name,
     class_id: s.class_id,
-    class_name: s.classes?.name ?? "-",
-    gender: s.gender,
+    class_name: s.class_name ?? "-",
+    gender: s.gender as Gender,
     generation: s.generation,
-    active: s.active,
+    active: !!s.active,
   }));
 }
 
@@ -55,40 +67,39 @@ export async function createStudent(input: {
   generation: string | null;
   active: boolean;
 }) {
-  const supabase = getSupabaseAdmin();
   const nis = input.nis.trim();
+  const id = uuidv4();
+  const connection = await pool.getConnection();
 
-  const { data: existing, error: existingError } = await supabase
-    .from("students")
-    .select("id")
-    .eq("nis", nis)
-    .maybeSingle();
-  if (existingError) throw existingError;
-  if (existing) throw new Error(`NIS ${nis} sudah terdaftar.`);
+  try {
+    await connection.beginTransaction();
 
-  const { data: student, error } = await supabase
-    .from("students")
-    .insert({
-      nis,
-      name: input.name.trim(),
-      class_id: input.classId,
-      gender: input.gender,
-      generation: input.generation,
-      active: input.active,
-    })
-    .select("id")
-    .single();
-  if (error) throw error;
+    const [existing] = await connection.query<RowDataPacket[]>(
+      `SELECT id FROM students WHERE nis = ? LIMIT 1`,
+      [nis]
+    );
+    if (existing.length > 0) throw new Error(`NIS ${nis} sudah terdaftar.`);
 
-  await supabase.from("student_class_history").insert({
-    student_id: student.id,
-    class_id: input.classId,
-    gender: input.gender,
-    effective_from: toWIBDateString(),
-    effective_to: null,
-  });
+    await connection.query(
+      `INSERT INTO students (id, nis, name, class_id, gender, generation, active)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, nis, input.name.trim(), input.classId, input.gender, input.generation, input.active ? 1 : 0]
+    );
 
-  return student.id as string;
+    await connection.query(
+      `INSERT INTO student_class_history (id, student_id, class_id, gender, effective_from, effective_to)
+       VALUES (?, ?, ?, ?, ?, NULL)`,
+      [uuidv4(), id, input.classId, input.gender, toWIBDateString()]
+    );
+
+    await connection.commit();
+    return id;
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
 }
 
 export async function updateStudent(
@@ -101,41 +112,51 @@ export async function updateStudent(
     gender?: Gender;
   }
 ) {
-  const supabase = getSupabaseAdmin();
+  const connection = await pool.getConnection();
+  try {
+    const updates: string[] = [];
+    const values: any[] = [];
 
-  const patch: Record<string, unknown> = {};
-  if (input.name !== undefined) patch.name = input.name.trim();
-  if (input.generation !== undefined) patch.generation = input.generation;
-  if (input.active !== undefined) patch.active = input.active;
+    if (input.name !== undefined) {
+      updates.push("name = ?");
+      values.push(input.name.trim());
+    }
+    if (input.generation !== undefined) {
+      updates.push("generation = ?");
+      values.push(input.generation);
+    }
+    if (input.active !== undefined) {
+      updates.push("active = ?");
+      values.push(input.active ? 1 : 0);
+    }
 
-  if (Object.keys(patch).length > 0) {
-    const { error } = await supabase.from("students").update(patch).eq("id", id);
-    if (error) throw error;
+    if (updates.length > 0) {
+      values.push(id);
+      await connection.query(`UPDATE students SET ${updates.join(", ")} WHERE id = ?`, values);
+    }
+  } finally {
+    connection.release();
   }
 
-  // Perubahan kelas/gender ditangani lewat histori kelas agar data lama aman.
+  // Perubahan kelas dikelola via history (punya transaksi sendiri)
   if (input.classId !== undefined || input.gender !== undefined) {
-    const { data: current, error: currentError } = await supabase
-      .from("students")
-      .select("class_id, gender")
-      .eq("id", id)
-      .single();
-    if (currentError) throw currentError;
+    const [current] = await pool.query<RowDataPacket[]>(
+      `SELECT class_id, gender FROM students WHERE id = ? LIMIT 1`,
+      [id]
+    );
+    if (current.length === 0) throw new Error("Student not found");
 
-    const newClassId = input.classId ?? current.class_id;
-    const newGender = input.gender ?? current.gender;
+    const newClassId = input.classId ?? current[0].class_id;
+    const newGender = input.gender ?? current[0].gender;
 
-    if (newClassId !== current.class_id || newGender !== current.gender) {
-      await changeStudentClass(supabase, id, newClassId, newGender, toWIBDateString());
+    if (newClassId !== current[0].class_id || newGender !== current[0].gender) {
+      await changeStudentClass(id, newClassId, newGender, toWIBDateString());
     }
   }
 }
 
 export async function deleteStudent(id: string) {
-  const supabase = getSupabaseAdmin();
-
-  const { error } = await supabase.from("students").delete().eq("id", id);
-  if (error) throw error;
+  await pool.query(`DELETE FROM students WHERE id = ?`, [id]);
 }
 
 export interface ImportRowResult {
@@ -155,16 +176,14 @@ export async function importStudents(
     active: string;
   }>
 ): Promise<ImportRowResult[]> {
-  const supabase = getSupabaseAdmin();
-  const { data: classes, error: classesError } = await supabase.from("classes").select("id, name");
-  if (classesError) throw classesError;
-  const classMap = new Map((classes ?? []).map((c) => [c.name.toLowerCase(), c.id]));
+  const [classesRows] = await pool.query<RowDataPacket[]>(`SELECT id, name FROM classes`);
+  const classMap = new Map(classesRows.map((c) => [c.name.toLowerCase(), c.id]));
 
   const results: ImportRowResult[] = [];
   const seenNis = new Set<string>();
 
   for (let i = 0; i < rows.length; i++) {
-    const rowNum = i + 2; // baris 1 = header
+    const rowNum = i + 2; 
     const raw = rows[i];
     const nis = String(raw.nis ?? "").trim();
     const name = String(raw.name ?? "").trim();
@@ -206,16 +225,11 @@ export async function importStudents(
       continue;
     }
 
-    const { data: existing, error: existingError } = await supabase
-      .from("students")
-      .select("id")
-      .eq("nis", nis)
-      .maybeSingle();
-    if (existingError) {
-      results.push({ row: rowNum, nis, status: "error", message: existingError.message });
-      continue;
-    }
-    if (existing) {
+    const [existing] = await pool.query<RowDataPacket[]>(
+      `SELECT id FROM students WHERE nis = ? LIMIT 1`,
+      [nis]
+    );
+    if (existing.length > 0) {
       results.push({ row: rowNum, nis, status: "skipped", message: "NIS sudah terdaftar, dilewati." });
       continue;
     }

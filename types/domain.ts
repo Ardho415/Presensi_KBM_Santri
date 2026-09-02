@@ -1,6 +1,6 @@
 export type Gender = "L" | "P";
 
-export type SessionType = "subuh" | "malam";
+export type SessionType = "subuh" | "pagi" | "siang" | "malam";
 
 export type AttendanceStatus = "hadir" | "terlambat" | "izin" | "sakit" | "alpa";
 
