@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuth, handleApiError } from "@/lib/api-guard";
-import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import pool from "@/lib/db";
 
-// Mengedit nilai default waktu sesi (Subuh/Malam) yang dipakai sebagai
-// pre-fill saat admin membuka sesi baru di halaman "Buka Sesi". Mengubah
-// default TIDAK mengubah sesi yang sudah terlanjur dibuat sebelumnya,
-// karena attendance_sessions menyimpan salinan waktunya sendiri.
 export async function PATCH(request: NextRequest) {
   const unauthorized = await requireAuth();
   if (unauthorized) return unauthorized;
@@ -21,17 +17,10 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const supabase = getSupabaseAdmin();
-    const { error } = await supabase
-      .from("session_settings")
-      .update({
-        scan_start_time: scanStartTime,
-        on_time_until: onTimeUntil,
-        end_time: endTime,
-      })
-      .eq("session_type", sessionType);
-
-    if (error) throw error;
+    await pool.query(
+      `UPDATE session_settings SET scan_start_time = ?, on_time_until = ?, end_time = ? WHERE session_type = ?`,
+      [scanStartTime, onTimeUntil, endTime, sessionType]
+    );
 
     return NextResponse.json({ ok: true });
   } catch (err) {

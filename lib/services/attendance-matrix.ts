@@ -1,12 +1,13 @@
 import "server-only";
-import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import pool from "@/lib/db";
 import type { AttendanceStatus, Gender } from "@/types/domain";
+import type { RowDataPacket } from "mysql2";
 
 export interface MatrixSessionColumn {
   sessionId: string;
   date: string;
   type: "subuh" | "malam";
-  label: string; // contoh: "16 Subuh"
+  label: string; 
 }
 
 export interface MatrixStudentRow {
@@ -16,7 +17,7 @@ export interface MatrixStudentRow {
   currentClassName: string;
   currentGroupName: string;
   currentGender: Gender;
-  cells: Record<string, "H" | "T" | "I" | "S" | "A" | "-" | "">; // sessionId -> code
+  cells: Record<string, "H" | "T" | "I" | "S" | "A" | "-" | "">; 
 }
 
 interface HistoryEntry {
@@ -40,120 +41,102 @@ function pickGroupForDate(
   return fallback;
 }
 
-/**
- * Membangun data matrix presensi untuk rentang tanggal & filter kelompok
- * tertentu. Dipakai baik oleh Detail Presensi (menampilkan grid) maupun
- * Rekap Presensi (menghitung agregat).
- *
- * PENTING soal desain (didokumentasikan sesuai requirement #53):
- * - Baris (santri mana yang ditampilkan) ditentukan oleh KELAS/KELOMPOK
- *   SAAT INI, sesuai filter dropdown, agar daftar tetap stabil dan mudah
- *   dipahami ketua kelas.
- * - Setiap SEL dihitung berdasarkan kelompok santri PADA TANGGAL SESI
- *   tersebut (via histori kelas), sehingga histori tetap akurat walau
- *   santri pindah kelas di tengah periode (requirement #7 & #41).
- */
+const formatDateStr = (dateVal: any) => {
+  if (typeof dateVal === 'string') return dateVal;
+  const d = new Date(dateVal);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+};
+
 export async function buildAttendanceMatrix(params: {
   dateFrom: string;
   dateTo: string;
-  groupId?: string; // undefined/"" = semua kelas
+  groupId?: string; 
   includeInactive?: boolean;
 }): Promise<{ sessions: MatrixSessionColumn[]; rows: MatrixStudentRow[] }> {
-  const supabase = getSupabaseAdmin();
+  
+  const [sessionRows] = await pool.query<RowDataPacket[]>(
+    `SELECT id, session_date, session_type
+     FROM attendance_sessions
+     WHERE session_date >= ? AND session_date <= ?
+     ORDER BY session_date ASC, session_type ASC`,
+    [params.dateFrom, params.dateTo]
+  );
 
-  // 1. Sessions dalam rentang tanggal
-  const { data: sessionRows, error: sessionsError } = await supabase
-    .from("attendance_sessions")
-    .select("id, session_date, session_type")
-    .gte("session_date", params.dateFrom)
-    .lte("session_date", params.dateTo)
-    .order("session_date", { ascending: true })
-    .order("session_type", { ascending: true });
-  if (sessionsError) throw sessionsError;
+  const sessions: MatrixSessionColumn[] = sessionRows.map((s) => {
+    const dStr = formatDateStr(s.session_date);
+    return {
+      sessionId: s.id,
+      date: dStr,
+      type: s.session_type,
+      label: `${parseInt(dStr.split("-")[2], 10)} ${s.session_type === "subuh" ? "Subuh" : "Malam"}`,
+    };
+  });
 
-  const sessions: MatrixSessionColumn[] = (sessionRows ?? []).map((s) => ({
-    sessionId: s.id,
-    date: s.session_date,
-    type: s.session_type,
-    label: `${parseInt(s.session_date.split("-")[2], 10)} ${s.session_type === "subuh" ? "Subuh" : "Malam"}`,
-  }));
-
-  // 2. Santri (baris) sesuai filter kelompok saat ini
-  let studentQuery = supabase
-    .from("students")
-    .select("id, nis, name, class_id, gender, active, classes(name)")
-    .order("name", { ascending: true });
-
-  if (!params.includeInactive) {
-    // tetap tampilkan semua by default agar histori aman; caller dapat
-    // mem-filter aktif saja bila diperlukan lewat parameter terpisah.
-  }
+  let studentQuery = `
+    SELECT s.id, s.nis, s.name, s.class_id, s.gender, s.active, c.name as class_name
+    FROM students s
+    LEFT JOIN classes c ON s.class_id = c.id
+    WHERE 1=1
+  `;
+  const studentValues: any[] = [];
 
   if (params.groupId) {
-    const { data: group, error: groupError } = await supabase
-      .from("groups")
-      .select("class_id, gender")
-      .eq("id", params.groupId)
-      .single();
-    if (groupError) throw groupError;
-    studentQuery = studentQuery.eq("class_id", group.class_id).eq("gender", group.gender);
+    const [groupRows] = await pool.query<RowDataPacket[]>(
+      `SELECT class_id, gender FROM groups WHERE id = ? LIMIT 1`,
+      [params.groupId]
+    );
+    if (groupRows.length > 0) {
+      studentQuery += ` AND s.class_id = ? AND s.gender = ?`;
+      studentValues.push(groupRows[0].class_id, groupRows[0].gender);
+    }
   }
 
-  const { data: studentRows, error: studentsError } = await studentQuery;
-  if (studentsError) throw studentsError;
+  studentQuery += ` ORDER BY s.name ASC`;
+  const [studentRows] = await pool.query<RowDataPacket[]>(studentQuery, studentValues);
 
-  if (!studentRows || studentRows.length === 0 || sessions.length === 0) {
+  if (studentRows.length === 0 || sessions.length === 0) {
     return { sessions, rows: [] };
   }
 
   const studentIds = studentRows.map((s) => s.id);
   const sessionIds = sessions.map((s) => s.sessionId);
 
-  // 3. Semua groups untuk mapping classId+gender -> groupName & groupId
-  const { data: allGroups, error: groupsError } = await supabase
-    .from("groups")
-    .select("id, class_id, gender, name");
-  if (groupsError) throw groupsError;
+  const [allGroups] = await pool.query<RowDataPacket[]>(`SELECT id, class_id, gender, name FROM groups`);
   const groupByClassGender = new Map(
-    (allGroups ?? []).map((g) => [`${g.class_id}__${g.gender}`, g])
+    allGroups.map((g) => [`${g.class_id}__${g.gender}`, g])
   );
 
-  // 4. Session groups (kelompok mana yang dibuka pada tiap sesi)
-  const { data: sessionGroupRows, error: sgError } = await supabase
-    .from("session_groups")
-    .select("session_id, group_id, opened")
-    .in("session_id", sessionIds);
-  if (sgError) throw sgError;
+  const [sessionGroupRows] = await pool.query<RowDataPacket[]>(
+    `SELECT session_id, group_id, opened FROM session_groups WHERE session_id IN (?)`,
+    [sessionIds]
+  );
   const openedSet = new Set(
-    (sessionGroupRows ?? []).filter((sg) => sg.opened).map((sg) => `${sg.session_id}__${sg.group_id}`)
+    sessionGroupRows.filter((sg) => sg.opened).map((sg) => `${sg.session_id}__${sg.group_id}`)
   );
 
-  // 5. Attendance records untuk santri & sesi terkait
-  const { data: recordRows, error: recordsError } = await supabase
-    .from("attendance_records")
-    .select("session_id, student_id, status")
-    .in("session_id", sessionIds)
-    .in("student_id", studentIds);
-  if (recordsError) throw recordsError;
+  const [recordRows] = await pool.query<RowDataPacket[]>(
+    `SELECT session_id, student_id, status FROM attendance_records WHERE session_id IN (?) AND student_id IN (?)`,
+    [sessionIds, studentIds]
+  );
   const recordMap = new Map(
-    (recordRows ?? []).map((r) => [`${r.session_id}__${r.student_id}`, r.status as AttendanceStatus])
+    recordRows.map((r) => [`${r.session_id}__${r.student_id}`, r.status as AttendanceStatus])
   );
 
-  // 6. Histori kelas semua santri terkait
-  const { data: historyRows, error: historyError } = await supabase
-    .from("student_class_history")
-    .select("student_id, class_id, gender, effective_from, effective_to")
-    .in("student_id", studentIds);
-  if (historyError) throw historyError;
+  const [historyRows] = await pool.query<RowDataPacket[]>(
+    `SELECT student_id, class_id, gender, effective_from, effective_to FROM student_class_history WHERE student_id IN (?)`,
+    [studentIds]
+  );
 
   const historyByStudent = new Map<string, HistoryEntry[]>();
-  for (const h of historyRows ?? []) {
+  for (const h of historyRows) {
     const list = historyByStudent.get(h.student_id) ?? [];
     list.push({
       classId: h.class_id,
       gender: h.gender,
-      effectiveFrom: h.effective_from,
-      effectiveTo: h.effective_to,
+      effectiveFrom: formatDateStr(h.effective_from),
+      effectiveTo: h.effective_to ? formatDateStr(h.effective_to) : null,
     });
     historyByStudent.set(h.student_id, list);
   }
@@ -166,7 +149,7 @@ export async function buildAttendanceMatrix(params: {
     alpa: "A",
   };
 
-  const rows: MatrixStudentRow[] = studentRows.map((s: any) => {
+  const rows: MatrixStudentRow[] = studentRows.map((s) => {
     const history = historyByStudent.get(s.id) ?? [];
     const cells: MatrixStudentRow["cells"] = {};
 
@@ -187,8 +170,6 @@ export async function buildAttendanceMatrix(params: {
       if (status) {
         cells[session.sessionId] = statusCode[status];
       } else {
-        // Sesi dibuka tapi belum ada record: kemungkinan sesi masih
-        // berjalan (belum difinalisasi jadi Alpa). Tampilkan kosong.
         cells[session.sessionId] = "";
       }
     }
@@ -197,10 +178,9 @@ export async function buildAttendanceMatrix(params: {
       studentId: s.id,
       nis: s.nis,
       name: s.name,
-      currentClassName: s.classes?.name ?? "-",
-      currentGroupName:
-        groupByClassGender.get(`${s.class_id}__${s.gender}`)?.name ?? "-",
-      currentGender: s.gender,
+      currentClassName: s.class_name ?? "-",
+      currentGroupName: groupByClassGender.get(`${s.class_id}__${s.gender}`)?.name ?? "-",
+      currentGender: s.gender as Gender,
       cells,
     };
   });

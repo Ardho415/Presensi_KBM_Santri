@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAuth, handleApiError } from "@/lib/api-guard";
-import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import pool from "@/lib/db";
+import type { RowDataPacket } from "mysql2";
 import { toWIBDateString, wibDateTimeToUTC } from "@/lib/timezone";
 import { finalizeExpiredSessionGroups } from "@/lib/services/attendance";
 
@@ -11,33 +12,30 @@ export async function GET() {
   try {
     await finalizeExpiredSessionGroups();
 
-    const supabase = getSupabaseAdmin();
     const todayStr = toWIBDateString();
     const now = new Date();
 
-    const { data: sessions, error: sessionsError } = await supabase
-      .from("attendance_sessions")
-      .select("id, session_type, scan_start_time, end_time, status")
-      .eq("session_date", todayStr);
-    if (sessionsError) throw sessionsError;
+    const [sessions] = await pool.query<RowDataPacket[]>(
+      `SELECT id, session_type, scan_start_time, end_time, status FROM attendance_sessions WHERE session_date = ?`,
+      [todayStr]
+    );
 
-    const activeSession = (sessions ?? []).find((s) => {
+    const activeSession = sessions.find((s) => {
       const start = wibDateTimeToUTC(todayStr, s.scan_start_time);
       const end = wibDateTimeToUTC(todayStr, s.end_time);
       return now >= start && now < end;
     });
 
-    const sessionIds = (sessions ?? []).map((s) => s.id);
+    const sessionIds = sessions.map((s) => s.id);
     const stats = { hadir: 0, terlambat: 0, izin: 0, sakit: 0, alpa: 0 };
 
     if (sessionIds.length > 0) {
-      const { data: records, error: recordsError } = await supabase
-        .from("attendance_records")
-        .select("status")
-        .in("session_id", sessionIds);
-      if (recordsError) throw recordsError;
+      const [records] = await pool.query<RowDataPacket[]>(
+        `SELECT status FROM attendance_records WHERE session_id IN (?)`,
+        [sessionIds]
+      );
 
-      for (const r of records ?? []) {
+      for (const r of records) {
         if (r.status in stats) {
           (stats as any)[r.status] += 1;
         }

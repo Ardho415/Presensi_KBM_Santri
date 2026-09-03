@@ -1,5 +1,7 @@
 import "server-only";
-import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import pool from "@/lib/db";
+import type { RowDataPacket } from "mysql2";
+import { v4 as uuidv4 } from "uuid";
 
 export interface OperatorListItem {
   id: string;
@@ -13,69 +15,72 @@ export interface OperatorListItem {
 }
 
 export async function listOperators(): Promise<OperatorListItem[]> {
-  const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
-    .from("attendance_operators")
-    .select("id, active, students(id, nis, name, active), groups(id, name)")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT o.id, o.student_id, o.group_id, o.active,
+            s.nis as student_nis, s.name as student_name, s.active as student_active,
+            g.name as group_name
+     FROM attendance_operators o
+     LEFT JOIN students s ON o.student_id = s.id
+     LEFT JOIN groups g ON o.group_id = g.id
+     ORDER BY o.created_at DESC`
+  );
 
-  return (data ?? []).map((o: any) => ({
+  return rows.map((o) => ({
     id: o.id,
-    student_id: o.students?.id,
-    nis: o.students?.nis ?? "-",
-    student_name: o.students?.name ?? "-",
-    student_active: o.students?.active ?? false,
-    group_id: o.groups?.id,
-    group_name: o.groups?.name ?? "-",
-    active: o.active,
+    student_id: o.student_id,
+    nis: o.student_nis ?? "-",
+    student_name: o.student_name ?? "-",
+    student_active: !!o.student_active,
+    group_id: o.group_id,
+    group_name: o.group_name ?? "-",
+    active: !!o.active,
   }));
 }
 
 export async function addOperator(nis: string, groupId: string) {
-  const supabase = getSupabaseAdmin();
+  const connection = await pool.getConnection();
+  try {
+    const [studentRows] = await connection.query<RowDataPacket[]>(
+      `SELECT id, name, active FROM students WHERE nis = ? LIMIT 1`,
+      [nis.trim()]
+    );
+    if (studentRows.length === 0) throw new Error("NIS tidak ditemukan pada data santri.");
+    
+    const student = studentRows[0];
+    if (!student.active) throw new Error("Santri sudah tidak aktif dan tidak dapat menjadi petugas.");
 
-  const { data: student, error: studentError } = await supabase
-    .from("students")
-    .select("id, name, active")
-    .eq("nis", nis.trim())
-    .maybeSingle();
-  if (studentError) throw studentError;
-  if (!student) throw new Error("NIS tidak ditemukan pada data santri.");
-  if (!student.active) throw new Error("Santri sudah tidak aktif dan tidak dapat menjadi petugas.");
+    const [existingRows] = await connection.query<RowDataPacket[]>(
+      `SELECT id, active FROM attendance_operators WHERE student_id = ? AND group_id = ? LIMIT 1`,
+      [student.id, groupId]
+    );
 
-  const { data: existing, error: existingError } = await supabase
-    .from("attendance_operators")
-    .select("id, active")
-    .eq("student_id", student.id)
-    .eq("group_id", groupId)
-    .maybeSingle();
-  if (existingError) throw existingError;
-
-  if (existing) {
-    if (existing.active) {
-      throw new Error(`${student.name} sudah terdaftar sebagai petugas pada kelompok ini.`);
+    if (existingRows.length > 0) {
+      const existing = existingRows[0];
+      if (existing.active) {
+        throw new Error(`${student.name} sudah terdaftar sebagai petugas pada kelompok ini.`);
+      }
+      await connection.query(
+        `UPDATE attendance_operators SET active = 1 WHERE id = ?`,
+        [existing.id]
+      );
+      return { id: existing.id, studentName: student.name };
     }
-    const { error } = await supabase
-      .from("attendance_operators")
-      .update({ active: true })
-      .eq("id", existing.id);
-    if (error) throw error;
-    return { id: existing.id, studentName: student.name };
+
+    const id = uuidv4();
+    await connection.query(
+      `INSERT INTO attendance_operators (id, student_id, group_id, active) VALUES (?, ?, ?, 1)`,
+      [id, student.id, groupId]
+    );
+
+    return { id, studentName: student.name };
+  } finally {
+    connection.release();
   }
-
-  const { data: created, error } = await supabase
-    .from("attendance_operators")
-    .insert({ student_id: student.id, group_id: groupId, active: true })
-    .select("id")
-    .single();
-  if (error) throw error;
-
-  return { id: created.id as string, studentName: student.name as string };
 }
 
 export async function setOperatorActive(id: string, active: boolean) {
-  const supabase = getSupabaseAdmin();
-  const { error } = await supabase.from("attendance_operators").update({ active }).eq("id", id);
-  if (error) throw error;
+  await pool.query(
+    `UPDATE attendance_operators SET active = ? WHERE id = ?`,
+    [active ? 1 : 0, id]
+  );
 }
