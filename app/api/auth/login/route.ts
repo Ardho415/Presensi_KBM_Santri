@@ -25,7 +25,10 @@ export async function POST(request: NextRequest) {
     const token = await createSession(username);
     await setSessionCookie(token);
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json(
+      { ok: true },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { ok: false, message: err.message ?? "Terjadi kesalahan pada server." },

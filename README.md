@@ -1,6 +1,6 @@
 # Absensi PPM Roudlotul Jannah
 
-Aplikasi presensi santri berbasis web untuk mengelola sesi presensi, scan QR code, validasi petugas, rekap kehadiran, serta riwayat siswa dan sesi. Project ini dibangun dengan Next.js dan Supabase.
+Aplikasi presensi santri berbasis web untuk mengelola sesi presensi, scan QR code, validasi petugas, rekap kehadiran, serta riwayat siswa dan sesi. Project ini dibangun dengan React melalui Next.js dan database MySQL/MariaDB.
 
 ## Fitur Utama
 
@@ -20,7 +20,7 @@ Aplikasi presensi santri berbasis web untuk mengelola sesi presensi, scan QR cod
 - Next.js 16
 - React 19
 - TypeScript
-- Supabase
+- MySQL/MariaDB
 - Tailwind CSS
 - SWR
 - html5-qrcode
@@ -34,7 +34,7 @@ Aplikasi presensi santri berbasis web untuk mengelola sesi presensi, scan QR cod
 ├── components/           # Komponen UI frontend
 ├── lib/                  # Service, helper, autentikasi, dan integrasi Supabase
 ├── public/               # Asset publik
-├── supabase/             # Migration database
+├── supabase/             # Migration SQL legacy (gunakan SQL yang sesuai database hosting)
 ├── types/                # Type definitions
 ├── .env.example          # Contoh environment variables
 ├── next.config.ts
@@ -49,7 +49,7 @@ Pastikan perangkat Anda sudah memiliki:
 
 - Node.js 20+
 - npm
-- Akun Supabase
+- Database MySQL/MariaDB yang bisa diakses dari server hosting
 - Browser modern
 
 ## Clone Repository
@@ -70,17 +70,22 @@ npm install
 Buat file `.env.local` di root project, lalu isi konfigurasi berikut:
 
 ```env
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SECRET_KEY=your_supabase_service_role_key
+DB_HOST=host-database-dari-provider
+DB_PORT=3306
+DB_USER=user_database
+DB_PASSWORD=password_database
+DB_NAME=nama_database
 AUTH_SECRET=generate_random_secret_here
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=password_anda
+CRON_SECRET=opsional_secret_cron
 ```
 
 Catatan:
 - `AUTH_SECRET` digunakan untuk JWT login dashboard admin.
 - `ADMIN_USERNAME` dan `ADMIN_PASSWORD` adalah credentials login administrator.
-- `SUPABASE_SECRET_KEY` harus menggunakan service role key dari Supabase.
+- Gunakan host database dari provider hosting, bukan `localhost`, jika database berada di server terpisah.
+- Jalankan SQL schema pada database hosting sebelum aplikasi digunakan.
 
 ## Menjalankan Aplikasi
 
@@ -103,15 +108,15 @@ npm run build
 npm run start
 ```
 
-## Database Supabase
+## Database MySQL/MariaDB
 
-Project ini menggunakan Supabase dan migration SQL yang ada di folder `supabase/migrations`.
+Project ini menggunakan MySQL/MariaDB melalui koneksi server-side.
 
 Untuk setup awal database:
 
-1. Buat project baru di Supabase
-2. Buka SQL Editor di Supabase
-3. Jalankan migration yang ada di folder `supabase/migrations` secara berurutan
+1. Buat database MySQL/MariaDB pada provider hosting.
+2. Import SQL schema yang ada di folder `supabase/migrations` setelah menyesuaikan sintaks jika provider membutuhkannya.
+3. Isi variabel `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, dan `DB_NAME` pada environment hosting.
 
 File migration awal:
 
@@ -130,6 +135,18 @@ Setelah aplikasi berjalan, login menggunakan username dan password yang sudah An
 - Semua akses database dilakukan melalui server-side service role Supabase.
 - Browser tidak langsung mengakses data sensitif.
 - Pastikan `.env.local` tidak ikut dipush ke GitHub untuk keamanan.
+
+## Hosting
+
+Aplikasi ini adalah React yang dijalankan oleh Next.js, sehingga hosting harus mendukung Node.js. Untuk Vercel, hubungkan repository, pilih framework Next.js, lalu isi environment variables di Project Settings. Untuk VPS atau hosting Node.js, jalankan:
+
+```bash
+npm install
+npm run build
+npm run start
+```
+
+Hosting statis seperti GitHub Pages tidak cukup karena aplikasi memiliki API login, API data, cookie session, dan koneksi database.
 
 ## GitHub Setup
 

@@ -1,12 +1,10 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { useState, FormEvent } from "react";
 import { Button, Input, Field } from "@/components/ui/Basics";
 
 export function LoginForm() {
-  const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -20,15 +18,19 @@ export function LoginForm() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        credentials: "same-origin",
+        cache: "no-store",
+        body: JSON.stringify({ username: username.trim(), password }),
       });
       const data = await res.json();
       if (!data.ok) {
         setError(data.message ?? "Username atau password salah.");
         return;
       }
-      router.push("/dashboard");
-      router.refresh();
+
+      // Reload halaman sekarang supaya cookie session yang baru dibuat
+      // pasti ikut terbaca saat server merender ulang dashboard.
+      window.location.assign("/dashboard");
     } catch {
       setError("Gagal terhubung ke server. Periksa koneksi internet dan coba lagi.");
     } finally {
